@@ -179,7 +179,7 @@ func Submit(ctx context.Context, p *profile.Profile, cfg Config) (*Result, error
 
 	// Leave the window open for inspection if it looks like the submit
 	// didn't succeed; otherwise there's nothing left to check, close it.
-	if !(cfg.Headful && !result.Success) {
+	if !cfg.Headful || result.Success {
 		closeBrowser()
 	}
 

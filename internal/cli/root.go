@@ -2,9 +2,6 @@
 package cli
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 
 	"github.com/nabec512/csl-overnighter/internal/profile"
@@ -29,9 +26,4 @@ func openStore() (*profile.Store, error) {
 		return nil, err
 	}
 	return profile.NewStore(dir)
-}
-
-func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "Error:", err)
-	os.Exit(1)
 }
