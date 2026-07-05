@@ -17,6 +17,7 @@ func newRunCmd() *cobra.Command {
 	var start string
 	var duration int
 	var dryRun bool
+	var chromePath string
 
 	cmd := &cobra.Command{
 		Use:   "run <profile-name>",
@@ -49,6 +50,7 @@ func newRunCmd() *cobra.Command {
 				Start:          start,
 				Duration:       duration,
 				DryRun:         dryRun,
+				ChromePath:     chromePath,
 			}
 
 			result, err := browser.Submit(context.Background(), p, cfg)
@@ -80,6 +82,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&start, "start", "", "first night the permit is valid for, format YYYY-MM-DD (default: today)")
 	cmd.Flags().IntVar(&duration, "duration", 1, "number of consecutive nights requested (1, 2, or 3)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "fill in the form and stop before clicking Submit")
+	cmd.Flags().StringVar(&chromePath, "chrome-path", "", "path to the Chrome/Chromium binary, if it's not installed somewhere chromedp looks by default")
 
 	return cmd
 }

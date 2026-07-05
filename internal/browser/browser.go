@@ -43,6 +43,13 @@ type Config struct {
 
 	// DryRun fills in the form and stops before clicking Submit.
 	DryRun bool
+
+	// ChromePath, if set, overrides chromedp's built-in browser discovery
+	// with an explicit path to the Chrome/Chromium binary. Needed when the
+	// browser isn't installed in one of the couple of default locations
+	// chromedp checks (e.g. Chrome installed under ~/Applications instead
+	// of /Applications on macOS).
+	ChromePath string
 }
 
 func (c Config) LogValue() slog.Value {
@@ -53,6 +60,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("start", c.Start),
 		slog.Int("duration", c.Duration),
 		slog.Bool("dry_run", c.DryRun),
+		slog.String("chrome_path", c.ChromePath),
 	)
 }
 
@@ -81,6 +89,9 @@ func Submit(ctx context.Context, p *profile.Profile, cfg Config) (*Result, error
 	}
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", !cfg.Headful))
+	if cfg.ChromePath != "" {
+		opts = append(opts, chromedp.ExecPath(cfg.ChromePath))
+	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 
