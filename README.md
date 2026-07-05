@@ -5,6 +5,16 @@ form using headless Chrome (chromedp).
 
 Form: https://cotesaintluc-publicform.icosolutions.com/publicforms/2
 
+## Install
+
+Prebuilt binaries are published on the [Releases](https://github.com/nabec512/csl-overnighter/releases)
+page. To download and install the right one for your machine automatically
+(macOS/Linux) into `~/Desktop/CSL-Permit/csl-overnighter`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nabec512/csl-overnighter/main/install.sh | bash
+```
+
 ## Build
 
 ```sh

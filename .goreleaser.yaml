@@ -1,5 +1,7 @@
 version: 2
 
+project_name: csl-overnighter
+
 builds:
   - id: csl-overnighter
     main: ./cmd/csl-overnighter
