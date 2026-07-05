@@ -13,17 +13,33 @@ import (
 )
 
 // Profile holds everything needed to fill in and submit the overnight
-// parking permit form for one vehicle/household.
-//
-// Fields is intentionally generic (key -> value) because the exact set of
-// form fields on the town's site is not finalized yet. Once the real form
-// is known, promote the fields it needs to named struct fields and keep
-// Fields only for anything left over.
+// parking permit form for one vehicle/household. Fields map 1:1 to the
+// Cote Saint-Luc overnight parking permit form
+// (https://cotesaintluc-publicform.icosolutions.com/publicforms/2).
+// Per-run values that change every submission (permit start date, number
+// of nights) are NOT part of the profile; they're flags on `run`.
 type Profile struct {
-	Name      string            `json:"name"`
-	Fields    map[string]string `json:"fields"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Name string `json:"name"`
+
+	Address string `json:"address"` // matched against the town's address combobox
+	Suite   string `json:"suite,omitempty"`
+
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Phone     string `json:"phone"` // any format; digits are extracted when filling
+	Email     string `json:"email"`
+
+	LicencePlate string `json:"licence_plate"` // no spaces, no letter "O" per the form
+	VehicleMake  string `json:"vehicle_make"`
+	VehicleModel string `json:"vehicle_model"`
+	VehicleColor string `json:"vehicle_color"`
+	Country      string `json:"country"`
+	State        string `json:"state"`
+
+	Reason string `json:"reason"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Store reads and writes profiles as JSON files in a directory, one file
@@ -119,16 +135,32 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
-// ParseFieldFlags converts repeated "key=value" strings (as passed via a
-// repeatable --field flag) into a map.
-func ParseFieldFlags(raw []string) (map[string]string, error) {
-	fields := make(map[string]string, len(raw))
-	for _, kv := range raw {
-		key, value, ok := strings.Cut(kv, "=")
-		if !ok || key == "" {
-			return nil, fmt.Errorf("invalid --field %q, expected key=value", kv)
-		}
-		fields[key] = value
+// Validate reports the first missing required field, if any. Suite is the
+// only optional field on the form.
+func (p *Profile) Validate() error {
+	required := map[string]string{
+		"address":       p.Address,
+		"first name":    p.FirstName,
+		"last name":     p.LastName,
+		"phone":         p.Phone,
+		"email":         p.Email,
+		"licence plate": p.LicencePlate,
+		"vehicle make":  p.VehicleMake,
+		"vehicle model": p.VehicleModel,
+		"vehicle color": p.VehicleColor,
+		"country":       p.Country,
+		"state":         p.State,
+		"reason":        p.Reason,
 	}
-	return fields, nil
+	// Deterministic order for stable error messages.
+	for _, key := range []string{
+		"address", "first name", "last name", "phone", "email",
+		"licence plate", "vehicle make", "vehicle model", "vehicle color",
+		"country", "state", "reason",
+	} {
+		if strings.TrimSpace(required[key]) == "" {
+			return fmt.Errorf("missing required field: %s", key)
+		}
+	}
+	return nil
 }

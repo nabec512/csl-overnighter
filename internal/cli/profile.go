@@ -23,20 +23,26 @@ func newProfileCmd() *cobra.Command {
 }
 
 func newProfileSaveCmd() *cobra.Command {
-	var rawFields []string
+	var p profile.Profile
 
 	cmd := &cobra.Command{
 		Use:   "save <name>",
 		Short: "Save (or overwrite) a profile with the given fields",
 		Long: "Save (or overwrite) a profile with the given fields.\n\n" +
-			"Fields are passed as repeated --field key=value flags, e.g.:\n" +
-			"  csl-overnighter profile save driveway --field plate=ABC1234 --field address=\"123 Main St\"",
+			"Example:\n" +
+			"  csl-overnighter profile save driveway \\\n" +
+			"    --address \"5150 AVENUE MACDONALD, Côte Saint-Luc\" \\\n" +
+			"    --first-name Jane --last-name Doe \\\n" +
+			"    --phone 5145551234 --email jane@example.com \\\n" +
+			"    --plate ABC1234 --make Toyota --model Corolla --color Grey \\\n" +
+			"    --country Canada --state Quebec --reason \"No driveway\"\n\n" +
+			"Running save again on the same <name> overwrites the existing profile;\n" +
+			"unset flags reset that field to empty, so pass the full set of flags\n" +
+			"each time (not just the ones you're changing).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-
-			fields, err := profile.ParseFieldFlags(rawFields)
-			if err != nil {
+			p.Name = args[0]
+			if err := p.Validate(); err != nil {
 				return err
 			}
 
@@ -44,18 +50,29 @@ func newProfileSaveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			p := &profile.Profile{Name: name, Fields: fields}
-			if err := store.Save(p); err != nil {
+			if err := store.Save(&p); err != nil {
 				return err
 			}
 
-			fmt.Printf("Saved profile %q with %d field(s) to %s\n", name, len(fields), store.Dir)
+			fmt.Printf("Saved profile %q to %s\n", p.Name, store.Dir)
 			return nil
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&rawFields, "field", nil, "a form field as key=value (repeatable)")
+	f := cmd.Flags()
+	f.StringVar(&p.Address, "address", "", "applicant's address, as it appears in the town's address lookup (required)")
+	f.StringVar(&p.Suite, "suite", "", "apartment/suite number (optional)")
+	f.StringVar(&p.FirstName, "first-name", "", "applicant first name (required)")
+	f.StringVar(&p.LastName, "last-name", "", "applicant last name (required)")
+	f.StringVar(&p.Phone, "phone", "", "applicant phone number, any format (required)")
+	f.StringVar(&p.Email, "email", "", "applicant email, confirmation is sent here (required)")
+	f.StringVar(&p.LicencePlate, "plate", "", "licence plate, no spaces, no letter O (required)")
+	f.StringVar(&p.VehicleMake, "make", "", "vehicle make (required)")
+	f.StringVar(&p.VehicleModel, "model", "", "vehicle model (required)")
+	f.StringVar(&p.VehicleColor, "color", "", "vehicle color (required)")
+	f.StringVar(&p.Country, "country", "", "vehicle registration country (required)")
+	f.StringVar(&p.State, "state", "", "vehicle registration state/province (required)")
+	f.StringVar(&p.Reason, "reason", "", "reason for the permit request (required)")
 
 	return cmd
 }
@@ -105,13 +122,22 @@ func newProfileShowCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Name:    %s\n", p.Name)
-			fmt.Printf("Created: %s\n", p.CreatedAt.Format("2006-01-02 15:04:05"))
-			fmt.Printf("Updated: %s\n", p.UpdatedAt.Format("2006-01-02 15:04:05"))
-			fmt.Println("Fields:")
-			for k, v := range p.Fields {
-				fmt.Printf("  %s = %s\n", k, v)
-			}
+			fmt.Printf("Name:          %s\n", p.Name)
+			fmt.Printf("Created:       %s\n", p.CreatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("Updated:       %s\n", p.UpdatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("Address:       %s\n", p.Address)
+			fmt.Printf("Suite:         %s\n", p.Suite)
+			fmt.Printf("First name:    %s\n", p.FirstName)
+			fmt.Printf("Last name:     %s\n", p.LastName)
+			fmt.Printf("Phone:         %s\n", p.Phone)
+			fmt.Printf("Email:         %s\n", p.Email)
+			fmt.Printf("Licence plate: %s\n", p.LicencePlate)
+			fmt.Printf("Vehicle make:  %s\n", p.VehicleMake)
+			fmt.Printf("Vehicle model: %s\n", p.VehicleModel)
+			fmt.Printf("Vehicle color: %s\n", p.VehicleColor)
+			fmt.Printf("Country:       %s\n", p.Country)
+			fmt.Printf("State:         %s\n", p.State)
+			fmt.Printf("Reason:        %s\n", p.Reason)
 			return nil
 		},
 	}

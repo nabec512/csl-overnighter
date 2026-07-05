@@ -16,17 +16,24 @@ multi-tenancy, and no auth beyond whatever the town's site itself requires.
 
 ## Status
 
-The form automation (`internal/browser`) is a stub. `browser.Submit` always
-returns an error until the target form's URL and field mapping are known.
-Everything else (profile CRUD, CLI plumbing) is implemented and working.
+Everything is implemented (profile CRUD, CLI plumbing, and form automation
+in `internal/browser`), but the form-filling code in `internal/browser.go`
+has **not been run against the live form** — there's no Chrome/Chromium
+binary in the dev sandbox this was written in, so it was written from a
+captured DOM snapshot rather than iteratively tested. Treat the field
+interaction logic (especially the Kendo ComboBox selection and the date
+field) as unverified until someone runs `csl-overnighter run <profile>
+--headful --dry-run --screenshot out.png` against the real form and checks
+the result. `Result.Success` detection after a real (non-dry-run) submit is
+a best-effort heuristic (see `internal/browser/browser.go`) and hasn't been
+validated against what the real success/failure page looks like either.
 
-**Pending from the user before automation can be implemented:** the permit
-form's URL and its field list (names/labels/types of each input, the submit
-button, and what a success vs. failure response looks like). Once supplied,
-implement navigation and field-filling in `internal/browser/browser.go`
-using chromedp selectors, and update `profile.Profile` / the `profile save`
-flags if specific fields deserve to be named instead of going through the
-generic `--field key=value` mechanism.
+The target form is a Kendo UI (Telerik) React SPA — the server returns an
+empty `<div id="root">` shell, all fields render client-side, and most
+inputs are Kendo widgets (ComboBox, MaskedTextBox, DatePicker,
+NumericTextBox) rather than plain `<input>`/`<select>` elements, which is
+why the filling logic in `internal/browser` is more involved than
+click-and-type.
 
 ## Commands
 
@@ -53,16 +60,21 @@ There is no separate lint config (no golangci-lint setup) — `go vet` +
 cmd/csl-overnighter/   main.go — thin entrypoint, delegates to internal/cli
 internal/cli/          cobra command tree (root, profile subcommands, run)
 internal/profile/      Profile type + Store (JSON-file persistence)
-internal/browser/      chromedp-driven form automation (stub — see Status)
+internal/browser/      chromedp-driven form automation
 ```
 
-**internal/profile** — `Profile` is `{Name, Fields map[string]string,
-CreatedAt, UpdatedAt}`. `Fields` is intentionally a generic string map
-rather than named struct fields, because the real form's field list isn't
-known yet; `profile save` accepts them via repeatable `--field key=value`
-flags (parsed by `ParseFieldFlags`). Profiles are stored as one JSON file
-per profile, named `<name>.json`, in `Store.Dir`. `profile.DefaultDir()`
-resolves this to `os.UserConfigDir()/csl-overnighter/profiles` (e.g.
+**internal/profile** — `Profile` has named fields matching the real form
+1:1 (`Address`, `Suite`, `FirstName`, `LastName`, `Phone`, `Email`,
+`LicencePlate`, `VehicleMake`, `VehicleModel`, `VehicleColor`, `Country`,
+`State`, `Reason`). `Start`/`Duration` are deliberately *not* profile
+fields — they change every run, so they're flags on `run` instead (`--start`,
+defaulting to today; `--duration`, defaulting to 1). `profile save` exposes
+one flag per field (`--address`, `--first-name`, etc.) and overwrites the
+whole profile each time it's called — there's no partial-update/patch
+mode, so all required flags must be passed together. Profiles are stored as
+one JSON file per profile, named `<name>.json`, in `Store.Dir`.
+`profile.DefaultDir()` resolves this to
+`os.UserConfigDir()/csl-overnighter/profiles` (e.g.
 `~/.config/csl-overnighter/profiles` on Linux). Files are written with
 `0600` and the directory with `0700` — profile data (plate, address, etc.)
 is sensitive personal info but is stored as plain JSON, not encrypted, per
@@ -72,16 +84,34 @@ the threat model of "local single-user tool."
 `csl-overnighter profile {save,list,show,delete}` and
 `csl-overnighter run <profile-name>`. Each command opens a `profile.Store`
 via `openStore()` (always at the default dir — there's currently no
-`--profile-dir` override flag). `run` loads a profile and calls
-`browser.Submit`.
+`--profile-dir` override flag). `run` validates `--start`/`--duration`,
+loads a profile, and calls `browser.Submit`.
 
 **internal/browser** — `Submit(ctx, profile, Config) (*Result, error)` is
-the one entrypoint the CLI calls. `Config` carries `Headful` (run with a
-visible window — default is headless), `Timeout`, and `ScreenshotPath`.
-`Result` carries `Success`, `ConfirmationText`, and `ScreenshotPath`. The
-intent is that all form-specific logic (navigation, selectors, waiting for
-elements, detecting success vs. failure) lives inside this package and
-nowhere else — `internal/cli` should stay form-agnostic.
+the one entrypoint the CLI calls; all form-specific logic (navigation,
+selectors, waiting for elements, detecting success vs. failure) lives here
+and nowhere else. `Config` carries `Headful`, `Timeout`, `ScreenshotPath`,
+`Start`, `Duration`, and `DryRun` (fills the form, screenshots, and stops
+before clicking Submit). Two field-filling strategies are used depending on
+widget type:
+- **Plain/masked/date/numeric fields** (`typeInto`): focus, select existing
+  text, then send real key events — required so the Kendo MaskedTextBox
+  (phone) and DatePicker (start date) see and format each keystroke rather
+  than getting a value set out from under them.
+- **Kendo ComboBox fields** (`selectCombobox`): Address, Vehicle
+  Make/Model/Color, Country, State, and Reason all require picking a listed
+  option rather than accepting free text. This function types the target
+  value to trigger the widget's live filter, waits for its popup listbox
+  (`#<id>list`), and clicks whichever `[role="option"]` matches the value
+  case-insensitively — erroring out with the list of available options if
+  nothing matches (e.g. a typo, or a value not present in that field's
+  list). Country is selected before State because State's option list is
+  populated based on the chosen Country (cascading fields) — don't reorder
+  those two.
+
+Before clicking Submit, `checkValidation` re-reads the DOM for any
+remaining `.k-invalid`/`aria-invalid` fields and aborts rather than
+submitting a form the site itself considers incomplete.
 
 ## Design decisions already made (don't re-litigate without reason)
 
