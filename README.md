@@ -12,7 +12,7 @@ page. To download and install the right one for your machine automatically
 (macOS/Linux) into `~/Desktop/CSL-Permit/csl-overnighter`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nabec512/csl-overnighter/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nabec512/csl-overnighter/refs/heads/master/install.sh | bash
 ```
 
 ## Build
