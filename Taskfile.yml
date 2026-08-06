@@ -1,0 +1,191 @@
+# Taskfile for csl-overnighter — https://taskfile.dev
+#
+# Common local loops:
+#   task                     list every task
+#   task check               gofmt + go vet + go test (the bar CLAUDE.md sets)
+#   task dry                 fill the form in a visible browser, stop before Submit
+#   task flake               run the dry-run N times to shake out flaky fields
+#   task run -- --duration 2 pass extra flags straight through to the CLI
+#
+# Override any var per-invocation, e.g.:
+#   task dry PROFILE=laura START=2026-08-09
+
+version: "3"
+
+vars:
+  # Go isn't on PATH by default in this repo's dev environment (see
+  # CLAUDE.md), so fall back to the absolute path when it's missing.
+  GO:
+    sh: command -v go >/dev/null 2>&1 && echo go || echo /usr/local/go/bin/go
+
+  BIN: bin/csl-overnighter
+  PKG: ./cmd/csl-overnighter
+
+  # Scratch dir for screenshots and other run artifacts (gitignored).
+  TMP: tmp
+
+  # Which saved profile the run/dry/flake tasks use.
+  PROFILE: '{{.PROFILE | default "niv"}}'
+
+  # Start date (YYYY-MM-DD) and night count for run/dry/flake. Empty START
+  # means "let the CLI default to today".
+  START: '{{.START | default ""}}'
+  DURATION: '{{.DURATION | default "1"}}'
+
+  # Path to the Chrome/Chromium binary. Leave empty to let chromedp find it
+  # itself; set it when Chrome lives somewhere chromedp doesn't look.
+  CHROME: '{{.CHROME | default ""}}'
+
+  # Assembled flags, so tasks below stay readable.
+  START_FLAG: '{{if .START}}--start {{.START}}{{end}}'
+  CHROME_FLAG: '{{if .CHROME}}--chrome-path {{.CHROME}}{{end}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------- build
+
+  build:
+    desc: Build the binary into bin/
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BIN}}"
+    cmds:
+      - "{{.GO}} build -o {{.BIN}} {{.PKG}}"
+
+  install:
+    desc: Install csl-overnighter into your GOBIN
+    cmds:
+      - "{{.GO}} install {{.PKG}}"
+
+  # ------------------------------------------------------------ run/debug
+
+  run:
+    desc: Submit a permit for real (PROFILE, START, DURATION; extra flags after --)
+    deps: [build]
+    cmds:
+      - >-
+        ./{{.BIN}} run {{.PROFILE}}
+        {{.START_FLAG}} --duration {{.DURATION}} {{.CHROME_FLAG}}
+        {{.CLI_ARGS}}
+
+  dry:
+    desc: Fill the form in a visible browser and stop before Submit, with a screenshot
+    deps: [build]
+    cmds:
+      - mkdir -p {{.TMP}}
+      - >-
+        ./{{.BIN}} run {{.PROFILE}}
+        {{.START_FLAG}} --duration {{.DURATION}} {{.CHROME_FLAG}}
+        --headful --dry-run --screenshot {{.TMP}}/dry.png
+        {{.CLI_ARGS}}
+      - 'echo "screenshot: {{.TMP}}/dry.png"'
+
+  dry:headless:
+    desc: Same as `dry` but without a browser window — check the screenshot afterward
+    deps: [build]
+    cmds:
+      - mkdir -p {{.TMP}}
+      - >-
+        ./{{.BIN}} run {{.PROFILE}}
+        {{.START_FLAG}} --duration {{.DURATION}} {{.CHROME_FLAG}}
+        --dry-run --screenshot {{.TMP}}/dry-headless.png
+        {{.CLI_ARGS}}
+      - 'echo "screenshot: {{.TMP}}/dry-headless.png"'
+
+  flake:
+    desc: Run the headless dry-run RUNS times (default 5) and report how many failed
+    deps: [build]
+    vars:
+      RUNS: '{{.RUNS | default "5"}}'
+    cmds:
+      - mkdir -p {{.TMP}}
+      - |
+        fails=0
+        for i in $(seq 1 {{.RUNS}}); do
+          echo "--- run $i/{{.RUNS}} ---"
+          if ./{{.BIN}} run {{.PROFILE}} \
+              {{.START_FLAG}} --duration {{.DURATION}} {{.CHROME_FLAG}} \
+              --dry-run --screenshot {{.TMP}}/flake-$i.png; then
+            echo "run $i: ok"
+          else
+            fails=$((fails + 1))
+            echo "run $i: FAILED (screenshot: {{.TMP}}/flake-$i.png)"
+          fi
+        done
+        echo
+        echo "$fails of {{.RUNS}} runs failed"
+        [ "$fails" -eq 0 ]
+
+  # -------------------------------------------------------------- profiles
+
+  profiles:
+    desc: List saved profiles
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} profile list
+
+  show:
+    desc: Show one saved profile (PROFILE=name)
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} profile show {{.PROFILE}}
+
+  profiles:dir:
+    desc: Print the directory profiles are stored in
+    silent: true
+    cmds:
+      - 'echo "${XDG_CONFIG_HOME:-$HOME/.config}/csl-overnighter/profiles"'
+
+  # ---------------------------------------------------------------- checks
+
+  fmt:
+    desc: Format all Go source in place
+    cmds:
+      - "{{.GO}} fmt ./..."
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - "{{.GO}} vet ./..."
+
+  test:
+    desc: Run offline tests (NAME=TestFoo to run one)
+    cmds:
+      - "{{.GO}} test ./... -short {{if .NAME}}-run {{.NAME}}{{end}} {{.CLI_ARGS}}"
+
+  test:live:
+    desc: Run every test including the ones that drive Chrome against the live form
+    cmds:
+      - "{{.GO}} test ./... -v {{if .NAME}}-run {{.NAME}}{{end}} {{.CLI_ARGS}}"
+
+  check:
+    desc: gofmt + go vet + offline tests — run before committing
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
+
+  tidy:
+    desc: Tidy go.mod / go.sum
+    cmds:
+      - "{{.GO}} mod tidy"
+
+  # --------------------------------------------------------------- release
+
+  release:snapshot:
+    desc: Build a local goreleaser snapshot into dist/ without publishing
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  clean:
+    desc: Remove build output, release artifacts, and run screenshots
+    cmds:
+      - rm -rf bin dist {{.TMP}}

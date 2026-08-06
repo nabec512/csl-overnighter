@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -51,6 +53,7 @@ func newRunCmd() *cobra.Command {
 				Duration:       duration,
 				DryRun:         dryRun,
 				ChromePath:     chromePath,
+				OnDateMismatch: onDateMismatch(headful),
 			}
 
 			result, err := browser.Submit(context.Background(), p, cfg)
@@ -77,7 +80,7 @@ func newRunCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&headful, "headful", false, "show the browser window instead of running headless")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the run")
+	cmd.Flags().DurationVar(&timeout, "timeout", 90*time.Second, "timeout for each phase of the run (page load, filling, submit)")
 	cmd.Flags().StringVar(&screenshotPath, "screenshot", "", "path to save a screenshot of the final page state")
 	cmd.Flags().StringVar(&start, "start", "", "first night the permit is valid for, format YYYY-MM-DD (default: today)")
 	cmd.Flags().IntVar(&duration, "duration", 1, "number of consecutive nights requested (1, 2, or 3)")
@@ -85,4 +88,26 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chromePath, "chrome-path", "", "path to the Chrome/Chromium binary, if it's not installed somewhere chromedp looks by default")
 
 	return cmd
+}
+
+// onDateMismatch builds the hook browser.Config.OnDateMismatch calls if the
+// start-date field still doesn't hold the requested value after fillDate's
+// own retries. In --headful mode, where the operator can actually see and
+// click into the browser window, it pauses and asks them to fix the field
+// by hand before letting the run continue. In headless mode there's no
+// window to fix, so it just fails with a pointer to --headful instead of
+// leaving the run hanging on a prompt nobody can act on.
+func onDateMismatch(headful bool) func(ctx context.Context, fieldID, expected, actual string) error {
+	return func(ctx context.Context, fieldID, expected, actual string) error {
+		if !headful {
+			return fmt.Errorf("field %s would not fill in automatically after several attempts (wanted %s, got %q); rerun with --headful to fix it by hand in the browser window", fieldID, expected, actual)
+		}
+
+		fmt.Printf("\nThe %s field didn't fill in correctly after several attempts (wanted %s, browser currently shows %q).\n", fieldID, expected, actual)
+		fmt.Println("Fix it by hand in the browser window, then press Enter here to continue...")
+		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+			return fmt.Errorf("read confirmation for manual date fix: %w", err)
+		}
+		return nil
+	}
 }

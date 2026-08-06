@@ -21,6 +21,15 @@ curl -fsSL https://raw.githubusercontent.com/nabec512/csl-overnighter/refs/heads
 go build -o bin/csl-overnighter ./cmd/csl-overnighter
 ```
 
+Or, with [go-task](https://taskfile.dev):
+
+```sh
+task            # list available tasks
+task build      # build into bin/
+task check      # gofmt + go vet + go test
+task dry        # fill the form in a visible browser, stop before Submit
+```
+
 ## Usage
 
 Save a profile:
@@ -52,5 +61,23 @@ csl-overnighter run driveway --headful --dry-run --screenshot out.png
 
 `--headful` shows the browser; `--dry-run` fills the form and stops before
 clicking Submit; `--screenshot` saves the final page state to a PNG.
+
+## Logging
+
+Progress goes to stderr, results to stdout. By default you get a few lines:
+
+```
+filling form url=https://... start=2026-08-06 nights=1
+form filled took=9.0s
+```
+
+Turn it up when something breaks — `-v` logs every field and dropdown
+choice (including personal details, so don't paste it around):
+
+```sh
+csl-overnighter run driveway -v          # everything
+csl-overnighter run driveway --log-level error   # near-silent, for cron
+CSL_LOG_LEVEL=error csl-overnighter run driveway # same, via env
+```
 
 See `CLAUDE.md` for architecture notes.

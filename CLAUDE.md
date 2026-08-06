@@ -17,16 +17,24 @@ multi-tenancy, and no auth beyond whatever the town's site itself requires.
 ## Status
 
 Everything is implemented (profile CRUD, CLI plumbing, and form automation
-in `internal/browser`), but the form-filling code in `internal/browser.go`
-has **not been run against the live form** — there's no Chrome/Chromium
-binary in the dev sandbox this was written in, so it was written from a
-captured DOM snapshot rather than iteratively tested. Treat the field
-interaction logic (especially the Kendo ComboBox selection and the date
-field) as unverified until someone runs `csl-overnighter run <profile>
---headful --dry-run --screenshot out.png` against the real form and checks
-the result. `Result.Success` detection after a real (non-dry-run) submit is
-a best-effort heuristic (see `internal/browser/browser.go`) and hasn't been
-validated against what the real success/failure page looks like either.
+in `internal/browser`).
+
+**Verified against the live form** (2026-08-06, via `task dry:headless`):
+every field fills correctly end-to-end — address, suite, name, the masked
+phone, email, plate, all six ComboBoxes (make/model/color/country/state/
+reason), the start date, and the night count — and `checkValidation` passes
+with no `.k-invalid` fields. Confirmed stable across 5 consecutive runs
+(`task flake`).
+
+Still **unverified**: everything past the Submit click. `--dry-run` stops
+before submitting, so `Result.Success` detection is still the best-effort
+heuristic described in `internal/browser/browser.go` and has never been
+compared against what the real success/failure page looks like. Check the
+screenshot after any real submit rather than trusting `Success`.
+
+The form renders in French with English subtitles; the date field displays
+`yyyy-MM-dd` with French placeholders for unfilled segments
+(`annee-mois-jour`), which is what `dateValueMatches` is written against.
 
 The target form is a Kendo UI (Telerik) React SPA — the server returns an
 empty `<div id="root">` shell, all fields render client-side, and most
@@ -37,9 +45,29 @@ click-and-type.
 
 ## Commands
 
-Go is at `/usr/local/go/bin/go` and is not on `PATH` by default in this
-environment; prefix commands with `export PATH=$PATH:/usr/local/go/bin` or
-otherwise reference it directly.
+There's a `Taskfile.yml` ([go-task](https://taskfile.dev)) wrapping the
+common loops — it resolves the Go path itself, so it's the easiest way in:
+
+```sh
+task                       # list every task
+task check                 # gofmt + go vet + offline tests (the bar below)
+task test:live             # also run the tests that drive Chrome at the real form
+task dry                   # fill the form in a visible browser, stop before Submit
+task dry:headless          # same, no window — writes tmp/dry-headless.png
+task flake RUNS=5          # repeat the dry-run to shake out flaky fields
+task run -- --duration 2   # extra flags pass through to the CLI
+```
+
+Tests that need Chrome skip themselves when no binary is present, and the
+ones that hit the live form are behind `-short` (so `task check` stays
+offline and `task test:live` doesn't).
+
+Vars are overridable per-invocation: `task dry PROFILE=laura
+START=2026-08-09 CHROME=/usr/bin/google-chrome`.
+
+Underneath, Go is at `/usr/local/go/bin/go` and is not on `PATH` by default
+in this environment; prefix commands with `export
+PATH=$PATH:/usr/local/go/bin` or otherwise reference it directly.
 
 ```sh
 go build ./...                  # build everything
@@ -92,12 +120,12 @@ the one entrypoint the CLI calls; all form-specific logic (navigation,
 selectors, waiting for elements, detecting success vs. failure) lives here
 and nowhere else. `Config` carries `Headful`, `Timeout`, `ScreenshotPath`,
 `Start`, `Duration`, and `DryRun` (fills the form, screenshots, and stops
-before clicking Submit). Two field-filling strategies are used depending on
-widget type:
-- **Plain/masked/date/numeric fields** (`typeInto`): focus, select existing
+before clicking Submit). Three field-filling strategies are used depending
+on widget type:
+- **Plain/masked/numeric fields** (`typeInto`): focus, select existing
   text, then send real key events — required so the Kendo MaskedTextBox
-  (phone) and DatePicker (start date) see and format each keystroke rather
-  than getting a value set out from under them.
+  (phone) sees and formats each keystroke rather than getting a value set
+  out from under it.
 - **Kendo ComboBox fields** (`selectCombobox`): Address, Vehicle
   Make/Model/Color, Country, State, and Reason all require picking a listed
   option rather than accepting free text. This function types the target
@@ -108,10 +136,79 @@ widget type:
   list). Country is selected before State because State's option list is
   populated based on the chosen Country (cascading fields) — don't reorder
   those two.
+- **The start-date field** (`fillDate` / `typeDate`): the Kendo DateInput
+  is segmented (year/month/day) and only responds to keyboard navigation
+  (Home, ArrowRight between segments), not text selection or typed
+  separators. Two things make it work, both found by running against the
+  live form — **don't undo either**:
+  1. Digits are typed **one at a time** via selector-less
+     `chromedp.KeyEvent`, never `SendKeys`. `SendKeys` re-focuses the node
+     first (its `KeyEventNode` calls `dom.Focus`), which resets the caret
+     to the first segment so month/day digits land in the year. And
+     back-to-back keystrokes get dropped mid-render, so there's a
+     `dateDigitSettle` pause after each digit.
+  2. The field is cleared (End, Delete, Home) at the start of each attempt,
+     so a retry doesn't type into a half-filled segment.
+
+  Before this, the year segment came out truncated or scrambled (`202-`,
+  `26-`, `2620-`) on most runs; after, 5/5 runs filled correctly on the
+  first attempt. `fillDate` still verifies rather than trusting the typing:
+  it reads the field back and retypes from scratch up to
+  `maxDateFillAttempts` (3) times, comparing digit groups positionally
+  (`dateValueMatches`). If it still doesn't match, `Config.OnDateMismatch`
+  (set in `internal/cli/run.go`'s `onDateMismatch`) gets one chance to fix
+  things before a final check: in `--headful` mode it pauses and prompts
+  the operator to fix the field by hand in the visible browser window and
+  press Enter; headless there's no window to fix, so it fails immediately
+  with a message pointing at `--headful`. That handoff runs on a
+  `context.WithoutCancel` context — a human at a keyboard will routinely
+  outlast `--timeout`, and the fix must not be discarded when they don't.
+  This only works in combination with the browser-lifetime rule below;
+  `WithoutCancel` alone drops a deadline but cannot revive a browser a
+  deadline already killed.
 
 Before clicking Submit, `checkValidation` re-reads the DOM for any
 remaining `.k-invalid`/`aria-invalid` fields and aborts rather than
 submitting a form the site itself considers incomplete.
+
+**Browser lifetime vs. timeouts — don't collapse these back together.**
+chromedp allocates the Chrome process on the *first* `Run` against a
+context, with `exec.CommandContext` bound to that same context. So putting
+the run's deadline on the context used for the first `Run` means the
+deadline kills the entire browser, not just the action that overran (their
+`Run` doc says as much). `Submit` therefore:
+1. starts Chrome with a bare `chromedp.Run(taskCtx)` on the **untimed**
+   `taskCtx`, which owns the process; then
+2. gives each phase (fill, validate, submit) its own deadline via the
+   `deadline()` helper, a `context.WithTimeout` child of `taskCtx`.
+
+`--timeout` is therefore per-phase, not whole-run. This is what lets the
+date field's manual-fix pause outlast it. Both halves are pinned by tests
+in `lifetime_test.go` — one asserts the broken shape really does kill the
+browser, the other that the current shape survives an expired phase
+deadline. If chromedp changes, those tests say so.
+
+## Logging
+
+`internal/cli/logging.go` owns log setup; `--log-level`
+(debug|info|warn|error), `-v/--verbose` (= debug), and `CSL_LOG_LEVEL` feed
+`resolveLogLevel`, in that precedence order. Logs go to **stderr** so
+stdout carries only the human result (confirmation line, screenshot path)
+and stays pipeable.
+
+- **info** (default) — a few progress lines through `compactHandler`, which
+  prints `message key=value` with no time/level/msg scaffolding, since
+  those lines are read by a person watching a run. Warn/error get a level
+  prefix so they stand out.
+- **debug** — the standard `slog.TextHandler` with timestamps and levels,
+  plus a line per field filled and per ComboBox option chosen (with how
+  many options the filter offered, which is what tells you whether the
+  site's lists moved). **Debug logs field values, including phone, email,
+  address, and plate** — don't paste it into a bug report unedited.
+
+The root command sets `SilenceUsage`/`SilenceErrors`: a failed run is
+almost always a bad value or a moved form, and dumping the whole usage
+block after the error just buries it.
 
 ## Design decisions already made (don't re-litigate without reason)
 
